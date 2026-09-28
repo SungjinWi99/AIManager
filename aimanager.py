@@ -426,7 +426,10 @@ def cmd_create(a) -> None:
     """GitHub에 팀 저장소를 만들고(기본 비공개) 기본 구조와 stats 브랜치를 올린 뒤 init 한다."""
     if not shutil.which("gh"):
         sys.exit("GitHub CLI(gh)가 필요합니다. 설치 후 `gh auth login`을 먼저 하세요.")
-    name = a.name if "/" in a.name else f"{_gh_login()}/{a.name}"
+    owner = a.name.split("/")[0] if "/" in a.name else _gh_login()
+    if not owner:
+        sys.exit("GitHub 로그인이 필요합니다. `gh auth login` 후 다시 실행하세요.")
+    name = f"{owner}/{a.name.split('/')[-1]}"
     team = a.team or name.split("/")[1]
     url = f"https://github.com/{name}.git"
     work = Path(tempfile.mkdtemp()) / "team"
@@ -454,16 +457,24 @@ def cmd_create(a) -> None:
 
 def cmd_invite(a) -> None:
     """팀원을 팀 저장소 Collaborator(쓰기)로 초대하고, 보낼 안내문을 출력한다."""
+    if not (TEAM / ".git").exists():
+        sys.exit("먼저 팀 저장소에 연결하세요: `aimanager create <이름>` 또는 `aimanager init <URL>`")
     web = repo_web_url()
+    if "github.com/" not in web:
+        sys.exit(f"GitHub 저장소가 아닙니다: {web}")
     repo = web.split("github.com/", 1)[1]
+    invited = 0
     for user in a.users:
         r = subprocess.run(["gh", "api", "-X", "PUT", f"repos/{repo}/collaborators/{user}", "-f", "permission=push"],
                            capture_output=True, text=True)
+        invited += r.returncode == 0
         print(("✔ " if r.returncode == 0 else "✖ ") + user + ("" if r.returncode == 0 else f": {r.stderr.strip()}"))
+    if not invited:
+        sys.exit("초대에 성공한 사람이 없습니다. GitHub 아이디와 저장소 관리 권한을 확인하세요.")
     print(f"""
 팀원에게 보낼 안내문:
 ----
-{load_json(TEAM / 'aimanager.json', {}).get('team') or repo} 팀 AI 스킬 저장소에 초대했어요. GitHub 초대 메일(또는 {web}/invitations)을 수락한 뒤,
+{load_json(TEAM / 'aimanager.json', {}).get('team') or repo} AI 스킬 저장소에 초대했어요. GitHub 초대 메일(또는 {web}/invitations)을 수락한 뒤,
 아래 문장을 Claude Code나 Codex에 보내세요.
 
 AIManager를 설치하고 우리 팀에 참여시켜줘. 설치 방법은 https://github.com/SungjinWi99/AIManager 를 읽고 따라 해. 팀 저장소는 {web}.git
@@ -471,7 +482,8 @@ AIManager를 설치하고 우리 팀에 참여시켜줘. 설치 방법은 https:
 
 
 def _gh_login() -> str:
-    return subprocess.run(["gh", "api", "user", "--jq", ".login"], capture_output=True, text=True).stdout.strip()
+    r = subprocess.run(["gh", "api", "user", "--jq", ".login"], capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else ""
 
 
 def hook_cmd(event: str, tool: str) -> str:
