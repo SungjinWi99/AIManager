@@ -33,8 +33,9 @@ class Pure(unittest.TestCase):
 
     def test_mcp_add_cmd(self):
         http = {"name": "n", "transport": "http", "url": "https://x/mcp", "headers": {"Authorization": "Bearer ${T}"}}
-        self.assertEqual(aimanager.mcp_add_cmd("codex", http)[-2:], ["--bearer-token-env-var", "T"])
-        self.assertIsNone(aimanager.mcp_add_cmd("codex", {**http, "headers": {"X-Key": "1"}}))
+        self.assertEqual(aimanager.codex_http_toml(http),
+                         '[mcp_servers."n"]\nurl = "https://x/mcp"\nbearer_token_env_var = "T"\n')
+        self.assertIsNone(aimanager.codex_http_toml({**http, "headers": {"X-Key": "1"}}))
         self.assertIsNone(aimanager.mcp_add_cmd("codex", {**http, "transport": "sse"}))
         stdio = {"name": "f", "command": "npx", "args": ["-y", "p"], "env": {"A": "1"}}
         self.assertEqual(aimanager.mcp_add_cmd("codex", stdio), ["codex", "mcp", "add", "f", "--env", "A=1", "--", "npx", "-y", "p"])

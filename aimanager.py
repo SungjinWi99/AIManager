@@ -200,16 +200,19 @@ def mcp_add_cmd(tool: str, s: dict) -> list[str] | None:
     if t == "stdio":
         env = [a for k, v in s.get("env", {}).items() for a in ("--env", f"{k}={v}")]
         return ["codex", "mcp", "add", s["name"], *env, "--", s["command"], *s.get("args", [])]
-    if t == "http":
-        cmd = ["codex", "mcp", "add", s["name"], "--url", s["url"]]
-        headers = s.get("headers", {})
-        m = re.fullmatch(r"Bearer \$\{(\w+)\}", headers.get("Authorization", ""))
-        if m:
-            cmd += ["--bearer-token-env-var", m.group(1)]
-        elif headers:
-            return None  # Codex CLI는 Bearer 토큰 환경 변수 외의 헤더를 받지 않는다
-        return cmd
-    return None  # Codex는 sse를 지원하지 않는다
+    return None  # Codex http는 codex_http_toml로 직접 쓰고, sse는 지원하지 않는다
+
+
+def codex_http_toml(s: dict) -> str | None:
+    """Codex http 서버 설정 조각. `codex mcp add --url`은 OAuth 로그인이 끝날 때까지 기다리므로 직접 쓴다."""
+    lines = [f"[mcp_servers.{json.dumps(s['name'])}]", f"url = {json.dumps(s['url'])}"]
+    headers = s.get("headers", {})
+    m = re.fullmatch(r"Bearer \$\{(\w+)\}", headers.get("Authorization", ""))
+    if m:
+        lines.append(f"bearer_token_env_var = {json.dumps(m.group(1))}")
+    elif headers:
+        return None  # Codex는 Bearer 토큰 환경 변수 외의 헤더를 지원하지 않는다
+    return "\n".join(lines) + "\n"
 
 
 def apply_mcp(verbose: bool = False) -> None:
@@ -217,6 +220,7 @@ def apply_mcp(verbose: bool = False) -> None:
     managed_path = STATE / "managed-mcp.json"
     managed = load_json(managed_path, {})
     existing = {"claude": claude_mcp_names, "codex": codex_mcp_names}
+    login = set()
     for tool in ("claude", "codex"):
         if not shutil.which(tool):
             continue
@@ -240,16 +244,42 @@ def apply_mcp(verbose: bool = False) -> None:
                 if verbose:
                     print(f"  {tool}: '{name}' 이름의 서버가 이미 있어 건너뜀")
                 continue
-            cmd = mcp_add_cmd(tool, s)
-            try:
-                added = bool(cmd) and subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, timeout=60).returncode == 0
-            except subprocess.TimeoutExpired:
-                added = False
+            if tool == "codex" and s.get("transport") == "http":
+                added = add_codex_http(s)
+            else:
+                cmd = mcp_add_cmd(tool, s)
+                try:
+                    added = bool(cmd) and subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, timeout=60).returncode == 0
+                except subprocess.TimeoutExpired:
+                    added = False
             if added:
                 mine[name] = _hash(s)
+                if s.get("transport", "stdio") != "stdio":
+                    login.add(name)
             elif verbose:
                 print(f"  {tool}: '{name}' 추가 실패 또는 미지원")
     save_json(managed_path, managed)
+    if login:
+        names = ", ".join(sorted(login))
+        add_notice(f"[AIManager] 팀 MCP({names})가 추가됐습니다. 로그인이 필요하면 사용자에게 한 줄로 안내하세요: "
+                   f"Claude Code는 /mcp, Codex는 `codex mcp login <이름>`.")
+
+
+def add_codex_http(s: dict) -> bool:
+    text = codex_http_toml(s)
+    if not text:
+        return False
+    path = HOME / ".codex" / "config.toml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    old = path.read_text() if path.exists() else ""
+    path.write_text(old + ("\n" if old and not old.endswith("\n\n") else "") + text)
+    return True
+
+
+def add_notice(line: str) -> None:
+    STATE.mkdir(parents=True, exist_ok=True)
+    with open(STATE / "notice", "a") as f:
+        f.write(line + "\n")
 
 
 def _hash(obj) -> str:
@@ -279,9 +309,8 @@ def check_packages_notice() -> None:
     h = _hash(p)
     if not package_cmds(p) or h in (_read(STATE / "packages-ack"), _read(STATE / "packages-notified")):
         return
-    (STATE / "notice").write_text(
-        "[AIManager] 팀 플러그인·패키지 선언이 바뀌었습니다. 자동으로 설치하지 말고, "
-        "사용자에게 `aimanager packages`로 확인 후 설치하도록 한 줄로 안내하세요.\n")
+    add_notice("[AIManager] 팀 플러그인·패키지 선언이 바뀌었습니다. 자동으로 설치하지 말고, "
+               "사용자에게 `aimanager packages`로 확인 후 설치하도록 한 줄로 안내하세요.")
     (STATE / "packages-notified").write_text(h)
 
 
