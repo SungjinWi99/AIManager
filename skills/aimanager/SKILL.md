@@ -1,11 +1,17 @@
 ---
 name: aimanager
-description: AIManager로 팀의 AI 스킬·플러그인·MCP를 공유하고 관리한다. "이 스킬 팀에 공유해줘", "팀 스킬 수정 올려줘", "팀 MCP 추가해줘", "팀 플러그인 추가/설치해줘", "팀 스킬 사용 통계 보여줘", "AIManager 점검/제거해줘" 같은 요청에 사용한다.
+description: AIManager로 팀의 AI 스킬·플러그인·MCP를 공유하고 관리한다. "팀 저장소 새로 만들어줘", "팀원 초대해줘", "이 스킬 팀에 공유해줘", "팀 스킬 수정 올려줘", "팀 MCP 추가해줘", "팀 플러그인 추가/설치해줘", "팀 스킬 사용 통계 보여줘", "AIManager 점검/제거해줘" 같은 요청에 사용한다.
 ---
 
 # aimanager
 
 명령은 `aimanager`(없으면 `python3 ~/.aimanager/tool/aimanager.py`)로 실행한다. 사용자가 직접 명령을 칠 필요가 없도록 에이전트가 실행하고, 결과를 사용자 언어로 짧게 알려준다.
+
+## 팀 만들기·초대·참여
+
+- 새 팀(팀장): 저장소 이름을 묻고 `aimanager create <이름>` (기본 비공개, `--public`, `--team <팀 이름>`). 이어서 팀원 GitHub 아이디를 묻고 `aimanager invite <아이디...>` → 출력된 안내문을 사용자에게 전달한다.
+- 참여(팀원): `aimanager init <팀 저장소 URL>`. URL이 없으면 새로 만들지 말고 팀장에게 받아오라고 안내한다.
+- 끝나면 Codex 사용자에게 `/hooks`에서 AIManager 훅 신뢰를 안내하고, `aimanager doctor`로 확인한다.
 
 ## 스킬 공유 (새 스킬, 팀 스킬 수정)
 

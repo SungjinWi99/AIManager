@@ -360,13 +360,17 @@ def edit_json(rel: str, default, fn):
 
 def cmd_init(a) -> None:
     ROOT.mkdir(exist_ok=True)
-    if not (TEAM / ".git").exists():
+    if (TEAM / ".git").exists():
+        current = git("remote", "get-url", "origin").stdout.strip()
+        if _repo_id(current) != _repo_id(a.repo):
+            sys.exit(f"이미 다른 팀 저장소에 연결되어 있습니다: {current}\n"
+                     "바꾸려면 `aimanager uninstall --purge` 후 다시 init 하세요.")
+    else:
         subprocess.run(["git", "clone", "-q", a.repo, str(TEAM)], check=True)
     cfg = config()
     cfg["repo"] = a.repo
     if not cfg.get("user"):
-        user = subprocess.run(["gh", "api", "user", "--jq", ".login"], capture_output=True, text=True).stdout.strip() \
-            if shutil.which("gh") else ""
+        user = _gh_login() if shutil.which("gh") else ""
         user = user or git("config", "user.name").stdout.strip() or os.environ.get("USER", "user")
         cfg["user"] = re.sub(r"[^\w.-]", "_", user)
     save_json(STATE / "config.json", cfg)
@@ -384,6 +388,90 @@ def cmd_init(a) -> None:
         print(f"  {bin_link.parent} 를 PATH에 추가하면 어디서든 `aimanager`를 쓸 수 있습니다.")
     print("  Codex를 쓴다면 Codex에서 /hooks 를 열고 AIManager 훅을 신뢰(trust)해 주세요.")
     print("  AI 도구를 새로 열면 팀 스킬이 보입니다.")
+
+
+def _repo_id(url: str) -> str:
+    return re.sub(r"(\.git)?/*$", "", re.sub(r"^.*?github\.com[:/]", "", url)).lower()
+
+
+TEAM_README = """# {team} AI 스킬·플러그인·MCP
+
+[AIManager](https://github.com/SungjinWi99/AIManager)로 관리하는 팀 저장소입니다.
+
+## 팀원 설치 (한 번만)
+
+GitHub 초대를 수락한 뒤 아래 문장을 AI 도구(Claude Code 또는 Codex)에 보내세요.
+
+```text
+AIManager를 설치하고 우리 팀에 참여시켜줘. 설치 방법은 https://github.com/SungjinWi99/AIManager 를 읽고 따라 해. 팀 저장소는 {url}
+```
+
+직접 설치하려면:
+
+```sh
+git clone https://github.com/SungjinWi99/AIManager.git ~/.aimanager/tool
+python3 ~/.aimanager/tool/aimanager.py init {url}
+```
+
+## 구성
+
+- `skills/` 팀 스킬
+- `mcp/mcp.json` 팀 MCP 서버
+- `aimanager.json` 팀 플러그인·npm 도구
+- `stats` 브랜치 팀 스킬 사용 기록
+"""
+
+
+def cmd_create(a) -> None:
+    """GitHub에 팀 저장소를 만들고(기본 비공개) 기본 구조와 stats 브랜치를 올린 뒤 init 한다."""
+    if not shutil.which("gh"):
+        sys.exit("GitHub CLI(gh)가 필요합니다. 설치 후 `gh auth login`을 먼저 하세요.")
+    name = a.name if "/" in a.name else f"{_gh_login()}/{a.name}"
+    team = a.team or name.split("/")[1]
+    url = f"https://github.com/{name}.git"
+    work = Path(tempfile.mkdtemp()) / "team"
+    (work / "skills").mkdir(parents=True)
+    (work / "skills" / ".gitkeep").write_text("")
+    save_json(work / "mcp" / "mcp.json", {"servers": []})
+    save_json(work / "aimanager.json", {"team": team, "packages": EMPTY_PACKAGES})
+    (work / "README.md").write_text(TEAM_README.format(team=team, url=url))
+    git("init", "-q", "-b", "main", cwd=work, check=True)
+    git("add", "-A", cwd=work, check=True)
+    git("commit", "-qm", "chore: AIManager 팀 저장소 시작", cwd=work, check=True)
+    r = subprocess.run(["gh", "repo", "create", name, "--public" if a.public else "--private",
+                        "--description", f"{team} 팀 AI 스킬·플러그인·MCP (AIManager)", "--source", str(work), "--push"],
+                       capture_output=True, text=True)
+    if r.returncode:
+        sys.exit(f"저장소를 만들지 못했습니다: {r.stderr.strip()}")
+    git("checkout", "-q", "--orphan", "stats", cwd=work, check=True)
+    git("rm", "-rqf", ".", cwd=work, check=True)
+    git("commit", "-q", "--allow-empty", "-m", "stats: 팀 스킬 사용 기록", cwd=work, check=True)
+    git("push", "-q", "origin", "stats", cwd=work, check=True)
+    print(f"팀 저장소를 만들었습니다: https://github.com/{name} ({'공개' if a.public else '비공개'})")
+    cmd_init(argparse.Namespace(repo=url))
+    print(f"\n다음: `aimanager invite <팀원 GitHub 아이디...>`로 팀원을 초대하세요.")
+
+
+def cmd_invite(a) -> None:
+    """팀원을 팀 저장소 Collaborator(쓰기)로 초대하고, 보낼 안내문을 출력한다."""
+    web = repo_web_url()
+    repo = web.split("github.com/", 1)[1]
+    for user in a.users:
+        r = subprocess.run(["gh", "api", "-X", "PUT", f"repos/{repo}/collaborators/{user}", "-f", "permission=push"],
+                           capture_output=True, text=True)
+        print(("✔ " if r.returncode == 0 else "✖ ") + user + ("" if r.returncode == 0 else f": {r.stderr.strip()}"))
+    print(f"""
+팀원에게 보낼 안내문:
+----
+{load_json(TEAM / 'aimanager.json', {}).get('team') or repo} 팀 AI 스킬 저장소에 초대했어요. GitHub 초대 메일(또는 {web}/invitations)을 수락한 뒤,
+아래 문장을 Claude Code나 Codex에 보내세요.
+
+AIManager를 설치하고 우리 팀에 참여시켜줘. 설치 방법은 https://github.com/SungjinWi99/AIManager 를 읽고 따라 해. 팀 저장소는 {web}.git
+----""")
+
+
+def _gh_login() -> str:
+    return subprocess.run(["gh", "api", "user", "--jq", ".login"], capture_output=True, text=True).stdout.strip()
 
 
 def hook_cmd(event: str, tool: str) -> str:
@@ -572,7 +660,10 @@ def cmd_doctor(a) -> None:
             check(n == len(HOOK_EVENTS[tool]), f"{tool} 훅 {n}/{len(HOOK_EVENTS[tool])}", "aimanager init <팀 저장소 URL>")
     for target in SKILL_TARGETS:
         missing = [n for n in team_skills() if not (target / n).exists()]
-        check(not missing, f"{target} 팀 스킬", f"없음: {', '.join(missing)} (같은 이름의 개인 스킬이 있으면 정상)")
+        check(not missing, f"{target} 팀 스킬", f"없음: {', '.join(missing)} → aimanager pull")
+        personal = [n for n in team_skills() if (target / n).exists() and not ((target / n).is_symlink() and is_ours(target / n))]
+        if personal:
+            print(f"ℹ {target}: 같은 이름의 개인 스킬이 우선함 → {', '.join(personal)}")
     if shutil.which("codex"):
         print("ℹ Codex 훅은 Codex의 /hooks 에서 신뢰(trust)해야 실행됩니다.")
     sys.exit(0 if ok else 1)
@@ -605,6 +696,14 @@ def cmd_uninstall(a) -> None:
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="aimanager", description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("create", help="(관리자) GitHub에 새 팀 저장소를 만들고 연결")
+    p.add_argument("name", help="저장소 이름 또는 owner/이름")
+    p.add_argument("--team", help="팀 이름 (기본: 저장소 이름)")
+    p.add_argument("--public", action="store_true", help="공개 저장소로 만들기 (기본 비공개)")
+    p.set_defaults(fn=cmd_create)
+    p = sub.add_parser("invite", help="(관리자) 팀원을 팀 저장소에 초대하고 안내문 출력")
+    p.add_argument("users", nargs="+", help="GitHub 아이디")
+    p.set_defaults(fn=cmd_invite)
     p = sub.add_parser("init", help="팀 저장소 연결, 훅 등록, 첫 동기화")
     p.add_argument("repo")
     p.set_defaults(fn=cmd_init)

@@ -31,6 +31,10 @@ class Pure(unittest.TestCase):
             self.assertEqual(used({"prompt": "파일 /x/skills/adr 봐줘"}), set())  # 경로 속 /adr는 호출이 아님
             self.assertEqual(used({"tool_name": "Skill", "tool_input": {"skill": "orca-cli"}}), set())  # 팀 스킬 아님
 
+    def test_repo_id(self):
+        same = {"https://github.com/A/b.git", "git@github.com:a/B.git", "https://github.com/a/b/"}
+        self.assertEqual({aimanager._repo_id(u) for u in same}, {"a/b"})
+
     def test_mcp_add_cmd(self):
         http = {"name": "n", "transport": "http", "url": "https://x/mcp", "headers": {"Authorization": "Bearer ${T}"}}
         self.assertEqual(aimanager.codex_http_toml(http),
@@ -116,6 +120,12 @@ class EndToEnd(unittest.TestCase):
             self.assertFalse((claude / "grilling").exists() or (claude / "grilling").is_symlink())  # 삭제 반영
             self.assertIn("[AIManager]", hook("prompt-submit", "claude", {"prompt": "hi"}))
             self.assertEqual(hook("prompt-submit", "claude", {"prompt": "hi"}), "")
+
+            # 다른 팀 저장소로 init하면 멈춘다
+            r = subprocess.run([sys.executable, SCRIPT, "init", "https://github.com/other/team.git"],
+                               env=env, capture_output=True, text=True)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("이미 다른 팀", r.stderr)
 
             sh(sys.executable, SCRIPT, "uninstall", env=env)
             self.assertNotIn("hooks", {k for k, v in json.loads((home / ".claude" / "settings.json").read_text()).items() if v})
