@@ -1,6 +1,6 @@
 <h1 align="center">AIManager</h1>
 
-<p align="center"><b>팀의 AI 스킬·MCP·플러그인을 한 곳에서 관리하고, 팀원 모두의 Claude Code와 Codex에 자동으로 나눠줍니다.</b></p>
+<p align="center"><b>팀 AI 스킬·MCP·플러그인 관리·공유 도구</b></p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
@@ -8,13 +8,7 @@
   <img src="https://img.shields.io/badge/agents-Claude%20Code%20%7C%20Codex-555.svg" alt="Claude Code | Codex">
 </p>
 
-팀장이 GitHub 저장소 하나에 좋은 스킬과 MCP 서버를 모아두면, 팀원은 AI 도구를 열 때마다 최신 상태를 자동으로 받습니다. 누구든 "이 스킬 팀에 공유해줘"라고 말하면 PR이 열리고, 머지되면 팀 전체에 퍼집니다.
-
-- **설치가 가볍습니다.** Python 표준 라이브러리만 씁니다. npm이나 pip 설치가 필요 없습니다.
-- **AI 도구를 느리게 만들지 않습니다.** 동기화는 백그라운드에서 돌고, 훅 한 번에 약 0.03초입니다.
-- **개인 설정을 존중합니다.** 같은 이름의 개인 스킬이나 개인 MCP 서버는 덮어쓰지 않습니다.
-
-[TeamAI](https://github.com/Tencent/teamai-cli)의 공유 방식을 따르되, 스킬·MCP·플러그인·사용 통계만 남긴 가벼운 버전입니다.
+관리자가 팀 GitHub 저장소에 팀에서 사용할 스킬과 MCP 서버를 모아두면, 팀원은 AI 도구를 열 때마다 최신 상태를 자동으로 다운받아 사용할 수 있습니다.
 
 ## 빠른 시작
 
