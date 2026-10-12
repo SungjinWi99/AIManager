@@ -22,6 +22,27 @@ def sh(*cmd, cwd=None, env=None, stdin=None):
 
 
 class Pure(unittest.TestCase):
+    def test_knowledge_revision_guard_and_same_content_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            sh("git", "init", "-q", cwd=repo)
+            source = repo / "input.md"
+            source.write_text("first\n")
+            with mock.patch.object(aimanager, "TEAM", repo), mock.patch.object(aimanager, "publish_knowledge") as publish:
+                publish.side_effect = lambda name, title, change: change(repo)
+                args = ["knowledge", "push", "topics/test", "--file", str(source), "--title", "Test", "--expected-sha", "absent"]
+                aimanager.main(args)
+                aimanager.main(args)
+                source.write_text("replacement\n")
+                with self.assertRaisesRegex(SystemExit, "KNOWLEDGE_CONFLICT"):
+                    aimanager.main(args)
+                path = repo / "knowledge/topics/test.md"
+                self.assertEqual(path.read_text(), "first\n")
+                sha = sh("git", "hash-object", str(path), cwd=repo).strip()
+                aimanager.main(args[:-1] + [sha])
+                self.assertEqual(path.read_text(), "replacement\n")
+
+
     def test_knowledge_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -47,6 +68,8 @@ class Pure(unittest.TestCase):
                 index = (repo / "knowledge/MEMORY.md").read_text()
                 self.assertEqual(index.count("[[issues/123]]"), 1)
                 self.assertIn("- Updated decision: [[issues/123]]", index)
+                self.assertIn("## Issue history", index)
+                self.assertNotIn("[[issues/123]]", index.split("## Issue history")[0])
                 (repo / "knowledge/MEMORY.md").write_text(index + "- Other: [[topics/other]]\n")
                 (repo / "skills").mkdir()
                 (repo / "skills/personal-marker").write_text("unchanged")

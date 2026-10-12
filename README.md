@@ -241,3 +241,5 @@ python3 -m unittest discover tests
 ## 라이선스
 
 [MIT](LICENSE)
+
+지식 인덱스의 `## Index`는 주제별 탐색이고 `## Issue history`는 보조 이력입니다. 업로드 시 이 구분을 유지합니다. 기존 문서를 읽고 수정할 때 `knowledge push ... --expected-sha <blob SHA>`로 동시 수정 덮어쓰기를 막을 수 있습니다. 새 문서는 `absent`를 사용하며 동일 내용 재시도는 허용합니다.
