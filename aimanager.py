@@ -432,7 +432,8 @@ def cmd_knowledge(a) -> None:
             lines = text.splitlines()
             matches = [i for i, old in enumerate(lines) if link in old]
             if matches:
-                lines[matches[0]] = line
+                description = lines[matches[0]].split(link, 1)[1]
+                lines[matches[0]] = line + description
                 for i in reversed(matches[1:]):
                     del lines[i]
             else:
