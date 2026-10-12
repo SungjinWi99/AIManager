@@ -373,6 +373,29 @@ def knowledge_path(repo: Path, name: str = "MEMORY") -> Path:
     return path
 
 
+def publish_knowledge(name: str, title: str, change) -> None:
+    """최신 main의 격리된 사본에서 지식 두 파일만 일반 push한다."""
+    git("fetch", "-q", "origin", "main", cwd=TEAM, check=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        wt = Path(tmp) / "wt"
+        git("worktree", "add", "-q", "--detach", str(wt), "origin/main", cwd=TEAM, check=True)
+        try:
+            if git("status", "--porcelain", cwd=wt, check=True).stdout.strip():
+                raise ValueError("지식 업로드 worktree가 깨끗하지 않습니다.")
+            change(wt)
+            git("add", "--", "knowledge/MEMORY.md", f"knowledge/{name}.md", cwd=wt, check=True)
+            diff = git("diff", "--cached", "--quiet", cwd=wt)
+            if diff.returncode not in (0, 1):
+                diff.check_returncode()
+            if diff.returncode == 1:
+                git("commit", "-qm", f"docs(knowledge): {title}", cwd=wt, check=True)
+                git("push", "-q", "origin", "HEAD:refs/heads/main", cwd=wt, check=True)
+            published = git("rev-parse", "HEAD", cwd=wt, check=True).stdout.strip()
+        finally:
+            git("worktree", "remove", "--force", str(wt), cwd=TEAM, check=True)
+        print(published)
+
+
 def cmd_knowledge(a) -> None:
     try:
         if a.action == "read":
@@ -411,7 +434,9 @@ def cmd_knowledge(a) -> None:
             path.write_text(content, encoding="utf-8")
             index.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-        open_pr(f"knowledge/{name}-{stamp()}", f"docs(knowledge): {title}", change)
+        publish_knowledge(name, title, change)
+    except subprocess.CalledProcessError as e:
+        sys.exit((e.stderr or "").strip() or "지식 업로드 Git 작업 실패. 원격 상태 확인 후 같은 명령으로 재시도하세요.")
     except (OSError, UnicodeError, ValueError) as e:
         sys.exit(str(e))
 
@@ -790,7 +815,7 @@ def main(argv=None) -> None:
     p = sub.add_parser("push", help="스킬을 팀 저장소에 PR로 올리기")
     p.add_argument("skill", help="스킬 이름 또는 폴더 경로")
     p.set_defaults(fn=cmd_push)
-    p = sub.add_parser("knowledge", help="팀 지식 읽기 / 파일과 인덱스 갱신 PR")
+    p = sub.add_parser("knowledge", help="팀 지식 읽기 / 파일과 인덱스를 main에 즉시 반영")
     p.add_argument("action", choices=["read", "push"])
     p.add_argument("path", nargs="?", help="issues/<id> 또는 topics/<slug> (.md 생략 가능)")
     p.add_argument("--file", help="검토된 UTF-8 Markdown 요약 파일")
