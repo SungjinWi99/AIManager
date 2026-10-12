@@ -416,6 +416,13 @@ def cmd_knowledge(a) -> None:
 
         def change(wt: Path):
             path = knowledge_path(wt, name)
+            expected = getattr(a, "expected_sha", None)
+            if expected is not None:
+                if expected != "absent" and not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", expected):
+                    raise ValueError("invalid expected knowledge SHA")
+                current = git("hash-object", str(path), cwd=wt, check=True).stdout.strip() if path.exists() else "absent"
+                if current != expected and (not path.exists() or path.read_text(encoding="utf-8") != content):
+                    raise ValueError("KNOWLEDGE_CONFLICT: source changed; read latest knowledge before retry")
             index = knowledge_path(wt)
             text = index.read_text(encoding="utf-8") if index.exists() else EMPTY_MEMORY
             if "## Index" not in text.splitlines():
@@ -430,6 +437,13 @@ def cmd_knowledge(a) -> None:
                     del lines[i]
             else:
                 lines.insert(lines.index("## Index") + 1, line)
+            # Topics are the lookup entry point; issues remain searchable supporting history.
+            history = [old for old in lines if re.search(r"\[\[issues/[A-Za-z0-9_-]+\]\]", old)]
+            lines = [old for old in lines if old not in history and old != "## Issue history"]
+            while lines and not lines[-1].strip():
+                lines.pop()
+            if history:
+                lines.extend(["", "## Issue history", *history])
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
             index.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -820,6 +834,7 @@ def main(argv=None) -> None:
     p.add_argument("path", nargs="?", help="issues/<id> 또는 topics/<slug> (.md 생략 가능)")
     p.add_argument("--file", help="검토된 UTF-8 Markdown 요약 파일")
     p.add_argument("--title", help="인덱스에 표시할 한 줄 제목")
+    p.add_argument("--expected-sha", help="읽은 지식 blob SHA 또는 absent; 동시 수정 덮어쓰기 방지")
     p.set_defaults(fn=cmd_knowledge)
     p = sub.add_parser("packages", help="팀 플러그인·npm 도구 설치 / add로 선언 추가")
     p.add_argument("action", nargs="?", choices=["install", "add"], default="install")
