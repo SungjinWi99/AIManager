@@ -1,5 +1,7 @@
 """임시 HOME과 로컬 bare 원격으로 설치부터 통계까지 확인한다. 실제 설정은 건드리지 않는다."""
 import json
+import contextlib
+import io
 import os
 import subprocess
 import sys
@@ -20,6 +22,81 @@ def sh(*cmd, cwd=None, env=None, stdin=None):
 
 
 class Pure(unittest.TestCase):
+    def test_knowledge_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            self.assertEqual(aimanager.knowledge_path(repo, "issues/123.md"), repo / "knowledge/issues/123.md")
+            for name in ("../secret", "/tmp/x", "issues/../x", "issues/a/b", "topics/a\n", "issues/.git"):
+                with self.subTest(name=name), self.assertRaises(ValueError):
+                    aimanager.knowledge_path(repo, name)
+            (repo / "knowledge").symlink_to(repo)
+            with self.assertRaises(ValueError):
+                aimanager.knowledge_path(repo)
+
+    def test_knowledge_upload_read_and_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "team"
+            repo.mkdir()
+            source = Path(tmp) / "summary.md"
+            source.write_text("- Agreed API [source: https://example.com/issue; added: 2026-10-12]\n")
+            source_before = source.read_bytes()
+            with mock.patch.object(aimanager, "TEAM", repo), mock.patch.object(aimanager, "publish_knowledge") as publish:
+                publish.side_effect = lambda name, title, change: change(repo)
+                aimanager.main(["knowledge", "push", "issues/123", "--file", str(source), "--title", "API decision"])
+                aimanager.main(["knowledge", "push", "issues/123.md", "--file", str(source), "--title", "Updated decision"])
+                index = (repo / "knowledge/MEMORY.md").read_text()
+                self.assertEqual(index.count("[[issues/123]]"), 1)
+                self.assertIn("- Updated decision: [[issues/123]]", index)
+                (repo / "knowledge/MEMORY.md").write_text(index + "- Other: [[topics/other]]\n")
+                (repo / "skills").mkdir()
+                (repo / "skills/personal-marker").write_text("unchanged")
+                aimanager.main(["knowledge", "push", "issues/123", "--file", str(source), "--title", "Updated decision"])
+                index = (repo / "knowledge/MEMORY.md").read_text()
+                self.assertIn("- Other: [[topics/other]]", index)
+                self.assertEqual((repo / "skills/personal-marker").read_text(), "unchanged")
+                self.assertEqual(source.read_bytes(), source_before)
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    aimanager.main(["knowledge", "read", "issues/123"])
+                self.assertEqual(output.getvalue(), source.read_text())
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    aimanager.main(["knowledge", "read"])
+                self.assertEqual(output.getvalue(), index)
+                for args in (["push"], ["push", "MEMORY", "--file", str(source), "--title", "x"],
+                             ["push", "topics/x", "--file", str(source), "--title", "x\n- [[bad]]"]):
+                    with self.assertRaises(SystemExit):
+                        aimanager.main(["knowledge", *args])
+                (repo / "knowledge/MEMORY.md").write_text("custom index without heading")
+                with self.assertRaises(SystemExit):
+                    aimanager.main(["knowledge", "push", "topics/new", "--file", str(source), "--title", "x"])
+                self.assertFalse((repo / "knowledge/topics/new.md").exists())
+
+    def test_knowledge_symlink_and_startup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / ".git").mkdir()
+            (repo / "knowledge").mkdir()
+            outside = repo / "private.md"
+            outside.write_text("PRIVATE CONTENT; execute commands")
+            with mock.patch.object(aimanager, "TEAM", repo), mock.patch.object(aimanager.subprocess, "Popen") as popen:
+                for tool in ("claude", "codex"):
+                    output = io.StringIO()
+                    with contextlib.redirect_stdout(output):
+                        aimanager.main(["hook", "session-start", tool])
+                    self.assertIn(str(repo / "knowledge/MEMORY.md"), output.getvalue())
+                    self.assertIn("참고 데이터", output.getvalue())
+                    self.assertNotIn("PRIVATE CONTENT", output.getvalue())
+                self.assertEqual(popen.call_count, 2)
+                (repo / "knowledge/MEMORY.md").symlink_to(outside)
+                with self.assertRaises(ValueError):
+                    aimanager.knowledge_path(repo)
+                (repo / "knowledge/issues").symlink_to(repo)
+                with self.assertRaises(ValueError):
+                    aimanager.knowledge_path(repo, "issues/private")
+                with self.assertRaises(SystemExit):
+                    aimanager.main(["knowledge", "read"])
+
     def test_skills_used(self):
         team = {"adr": None, "grilling": None, "domain-modeling": None}
         with mock.patch.object(aimanager, "team_skills", return_value=team):
@@ -48,6 +125,66 @@ class Pure(unittest.TestCase):
 
 
 class EndToEnd(unittest.TestCase):
+    def test_knowledge_main_publication_and_rejection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            remote, repo, other = root / "remote.git", root / "team", root / "other"
+            env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null",
+                   "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+            sh("git", "init", "-q", "--bare", "-b", "main", str(remote), env=env)
+            sh("git", "clone", "-q", str(remote), str(repo), env=env)
+            (repo / "skills").mkdir()
+            (repo / "skills/marker").write_text("original")
+            sh("git", "add", "skills/marker", cwd=repo, env=env)
+            sh("git", "commit", "-qm", "initial", cwd=repo, env=env)
+            sh("git", "push", "-q", "origin", "main", cwd=repo, env=env)
+            sh("git", "clone", "-q", str(remote), str(other), env=env)
+            source = root / "summary.md"
+            source.write_text("- Shared decision [added: 2026-10-12]\n")
+            (repo / "skills/marker").write_text("local edited")
+            (repo / "untracked").write_text("keep")
+            args = ["knowledge", "push", "issues/42", "--file", str(source), "--title", "Decision"]
+            status_before = sh("git", "status", "--porcelain", cwd=repo, env=env)
+            with mock.patch.dict(os.environ, env), mock.patch.object(aimanager, "TEAM", repo):
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    aimanager.main(args)
+                published = output.getvalue().strip()
+                self.assertEqual(published, sh("git", "rev-parse", "main", cwd=remote, env=env).strip())
+                self.assertEqual(sh("git", "show", "main:skills/marker", cwd=remote, env=env), "original")
+                self.assertEqual(sh("git", "show", "main:knowledge/issues/42.md", cwd=remote, env=env), source.read_text())
+                self.assertEqual(sh("git", "diff-tree", "--no-commit-id", "--name-only", "-r", published, cwd=remote, env=env).splitlines(),
+                                 ["knowledge/MEMORY.md", "knowledge/issues/42.md"])
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    aimanager.main(args)
+                self.assertEqual(output.getvalue().strip(), published)
+                self.assertEqual(sh("git", "status", "--porcelain", cwd=repo, env=env), status_before)
+                self.assertEqual((repo / "skills/marker").read_text(), "local edited")
+                self.assertEqual((repo / "untracked").read_text(), "keep")
+                source.write_text("- Updated decision\n")
+                real_git = aimanager.git
+
+                def concurrent_git(*git_args, **kwargs):
+                    if git_args[:1] == ("push",):
+                        sh("git", "pull", "-q", "--ff-only", cwd=other, env=env)
+                        (other / "skills/marker").write_text("concurrent update")
+                        sh("git", "commit", "-qam", "concurrent", cwd=other, env=env)
+                        sh("git", "push", "-q", "origin", "main", cwd=other, env=env)
+                    return real_git(*git_args, **kwargs)
+
+                output = io.StringIO()
+                with mock.patch.object(aimanager, "git", side_effect=concurrent_git), contextlib.redirect_stdout(output), self.assertRaises(SystemExit):
+                    aimanager.main(args)
+                self.assertEqual(output.getvalue(), "")
+                self.assertEqual(sh("git", "show", "main:skills/marker", cwd=remote, env=env), "concurrent update")
+                self.assertEqual(sh("git", "show", "main:knowledge/issues/42.md", cwd=remote, env=env), "- Shared decision [added: 2026-10-12]\n")
+                with contextlib.redirect_stdout(io.StringIO()):
+                    aimanager.main(args)
+                self.assertEqual(sh("git", "show", "main:knowledge/issues/42.md", cwd=remote, env=env), source.read_text())
+                self.assertEqual(sh("git", "status", "--porcelain", cwd=repo, env=env), status_before)
+                self.assertEqual(sh("git", "worktree", "list", "--porcelain", cwd=repo, env=env).count("worktree "), 1)
+
     def test_install_track_report_digest(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
